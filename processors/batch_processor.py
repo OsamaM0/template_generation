@@ -148,7 +148,22 @@ class BatchProcessor:
         document_uuid = document_data.get('uuid')
         filename = document_data.get('filename', 'Unknown')
         custom_id = document_data.get('custom_id')
+        collection_id = document_data.get('collection_id')
         content = document_data.get('content', '')
+        
+        # Skip documents with specific collection IDs
+        skip_collection_ids = [
+            'd441cb83-1db7-472d-8ed7-43933399ad41',
+            '1f7c2e76-f61d-4f6d-8425-6a7f43ad80c1',
+            'fabe3ac0-75a2-4765-995c-e6b94b7400e6',
+            'f1c13718-f6f9-46d5-be8a-3fcea6a4daee'
+        ]
+        
+        if collection_id in skip_collection_ids:
+            print(f"⏭️ Skipping document {filename} - collection_id {collection_id} is in skip list")
+            with self._lock:
+                self.stats.add_skip()
+            return
         
         if not content or content.strip() == '':
             print(f"⚠️ Skipping document with empty content: {filename}")
