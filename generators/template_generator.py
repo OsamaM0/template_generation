@@ -56,7 +56,7 @@ class TemplateGenerator:
             )
         except Exception:
             is_math = False
-        return "gpt-4o" if is_math else "gpt-4o-mini"
+        return "gpt-5" if is_math else "gpt-4o-mini"
 
     def _apply_model_to_components(self, model_name: str):
         """Instantiate a ChatOpenAI with the given model and apply it to all components."""
