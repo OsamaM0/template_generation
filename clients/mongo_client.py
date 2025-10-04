@@ -2,11 +2,10 @@
 MongoDB client for fetching goals and storing generated templates.
 """
 from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure, PyMongoError
-from typing import Dict, List, Any, Optional
+from pymongo.errors import ConnectionFailure
+from typing import Dict, List, Any
 from bson import ObjectId
 from datetime import datetime
-import json
 
 class MongoDBClient:
     """Client for MongoDB operations."""

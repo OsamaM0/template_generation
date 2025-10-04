@@ -31,7 +31,7 @@ class MindMapResponse(BaseModel):
     nodeDataArray: List[MindMapNode] = Field(description="Array of all nodes in the mind map")
     
     class Config:
-        allow_population_by_field_name = True
+        populate_by_name = True
         json_schema_extra = {
             "example": {
                 "class": "go.TreeModel",

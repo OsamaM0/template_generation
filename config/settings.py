@@ -38,12 +38,16 @@ class Settings:
     MINDMAP_CHUNK_OVERLAP_CHARS = int(os.getenv("MINDMAP_CHUNK_OVERLAP_CHARS", "250"))
     # Deduplicate nodes across chunks using normalized text per parent
     MINDMAP_DEDUPLICATE_NODES = os.getenv("MINDMAP_DEDUPLICATE_NODES", "true").lower() in ["1", "true", "yes"]
+    # Maximum allowed depth (root=0). Default 3 corresponds to root + level1 + level2
+    MINDMAP_MAX_DEPTH = int(os.getenv("MINDMAP_MAX_DEPTH", "3"))
+    # Remove / ignore example or narrative style nodes
+    MINDMAP_EXCLUDE_EXAMPLES = os.getenv("MINDMAP_EXCLUDE_EXAMPLES", "true").lower() in ["1", "true", "yes"]
     # Colors by depth (0=root, 1=main branches, 2=subtopics, 3+ deeper)
     MINDMAP_COLORS = [
         "gold",            # root
-        "skyblue",         # depth 1
-        "darkseagreen",    # depth 2
-        "palevioletred",   # depth 3
+        "turquoise",         # depth 1
+        "lavender",    # depth 2
+        "aqua",   # depth 3
         "lightcoral",      # depth 4
         "lightsteelblue",  # depth 5
         "plum",            # depth 6

@@ -15,9 +15,31 @@ A modular system for generating educational content templates including question
   - **Goals Provided**: Generate questions for specific learning goals
   - **Goals Auto-Generated**: Create goals from content, then generate questions
 
-### New: Multi-pass Mind Map Generation
+### New: Smart Mind Map Generation Workflow
 
-For long content, the mind map generator can now split the text into overlapping chunks, generate partial mind maps per chunk, and merge them into one comprehensive map. This improves coverage while staying under model context limits.
+**Two-Phase Approach for Better Quality:**
+
+1. **AI Generation Phase**: The AI focuses on content and structure, generating only:
+   - `key`: Unique identifier
+   - `parent`: Parent relationship
+   - `text`: Node content
+   - `loc`: Location (root only)
+
+2. **System Enhancement Phase**: Automatic intelligent assignment of:
+   - `brush`: Colors based on node depth (gold → skyblue → darkseagreen → palevioletred...)
+   - `dir`: Balanced left/right distribution with direction propagation
+
+**Benefits:**
+- ✅ Higher quality content structure (AI focuses on what it does best)
+- ✅ Consistent visual styling across all mind maps
+- ✅ Faster generation and lower token usage
+- ✅ Balanced and professional appearance
+
+See [MINDMAP_SMART_WORKFLOW.md](MINDMAP_SMART_WORKFLOW.md) for detailed documentation.
+
+### Multi-pass Mind Map Generation
+
+For long content, the mind map generator can split text into overlapping chunks, generate partial mind maps per chunk, and merge them into one comprehensive map.
 
 Control via environment variables:
 
@@ -25,10 +47,34 @@ Control via environment variables:
 - MINDMAP_CHUNK_SIZE_CHARS=1800 (characters per chunk)
 - MINDMAP_CHUNK_OVERLAP_CHARS=250 (overlap between chunks)
 - MINDMAP_DEDUPLICATE_NODES=true | false (deduplicate nodes by normalized text under the same parent)
+- MINDMAP_MAX_NODES=120 (maximum nodes in final output)
+- MINDMAP_COLORS=[...] (color array for depth-based coloring)
 
 Notes:
-- A synthetic root node labeled "Comprehensive Mind Map" (or Arabic equivalent) will appear when merging multiple chunks to keep a single-tree structure.
-- Colors and left/right balancing are preserved in post-processing. The total nodes are capped by MINDMAP_MAX_NODES.
+- A synthetic root node labeled "Comprehensive Mind Map" (or Arabic equivalent) will appear when merging multiple chunks.
+- Colors and left/right balancing are automatically applied in post-processing.
+
+### Mind Map Professional Mode (Concise Depth-Limited)
+
+New environment variables to control conciseness and relevance:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MINDMAP_MAX_DEPTH` | 3 | Maximum depth (root=0). 3 = root + level-1 + level-2. Deeper nodes are pruned. |
+| `MINDMAP_EXCLUDE_EXAMPLES` | true | When true, nodes detected as examples / stories / scenarios (multi-lingual keywords) are removed. |
+
+Prompt instructions (Arabic & English) were updated to:
+- Focus strictly on concepts directly tied to the lesson title
+- Avoid narrative examples, stories, case studies, filler
+- Limit node text to short noun phrases (≈ ≤6 words)
+- Keep balanced 4–7 main branches when possible
+
+Post-processing automatically:
+1. Prunes nodes deeper than `MINDMAP_MAX_DEPTH`
+2. Filters nodes containing example/story keywords (Arabic & English)
+3. Recomputes depth and assigns standardized colors & directions
+
+This yields cleaner, professional classroom-ready mind maps without tangential detail.
 
 ## 🚀 New Goal-Based Functionality
 

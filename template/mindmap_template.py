@@ -256,25 +256,115 @@ class MindMapTemplate(BaseTemplate):
                     assign_depth(ch, depth + 1, visited)
             assign_depth(root, 0, {root.get("key")})
             
-            # 5) Color by depth
+            # 5) Enforce maximum depth & remove example / unrelated nodes
+            max_allowed_depth = max(0, Settings.MINDMAP_MAX_DEPTH)
+            example_keywords = []
+            if Settings.MINDMAP_EXCLUDE_EXAMPLES:
+                example_keywords = [
+                    "مثال", "امثلة", "مثلاً", "على سبيل المثال", "قصة", "حكاية", "سيناريو", "تجربة", "توضيح", "case", "example", "e.g", "scenario", "story", "illustration", "experiment", "case study"
+                ]
+
+            # Build children mapping again for safe pruning
+            children = {}
+            for n in nodes:
+                children.setdefault(n.get("parent"), []).append(n)
+
+            # Mark nodes to keep
+            to_keep = set()
+            def dfs_keep(node, depth):
+                # Depth check
+                if depth > max_allowed_depth:
+                    return
+                text_val = str(node.get("text") or "").strip().lower()
+                # Example filtering
+                if Settings.MINDMAP_EXCLUDE_EXAMPLES and any(kw in text_val for kw in example_keywords):
+                    return
+                to_keep.add(node.get("key"))
+                for ch in children.get(node.get("key"), []):
+                    dfs_keep(ch, depth + 1)
+            dfs_keep(root, 0)
+
+            if len(to_keep) != len(nodes):
+                # Reconstruct pruned list, skipping removed nodes and orphaned subtrees
+                pruned = []
+                for n in nodes:
+                    k = n.get("key")
+                    p = n.get("parent")
+                    if k in to_keep and (p is None or p in to_keep):
+                        pruned.append(n)
+                nodes = pruned
+                data["nodeDataArray"] = nodes
+
+            # Recompute depth for remaining nodes
+            children = {}
+            for n in nodes:
+                children.setdefault(n.get("parent"), []).append(n)
+            def assign_depth(node, depth, visited):
+                node["_depth"] = depth
+                for ch in children.get(node.get("key"), []):
+                    if ch.get("key") in visited:
+                        continue
+                    visited.add(ch.get("key"))
+                    assign_depth(ch, depth + 1, visited)
+            assign_depth(root, 0, {root.get("key")})
+
+            # 6) Color by depth - Assign to ALL nodes based on their depth
             colors = Settings.MINDMAP_COLORS
             for n in nodes:
                 depth = max(0, min(n.get("_depth", 0), len(colors) - 1))
-                # Only set if missing to not fight the model
-                if not n.get("brush"):
-                    n["brush"] = colors[depth]
+                # Always assign brush based on depth
+                n["brush"] = colors[depth]
             
-            # 6) Balance main branches directions
+            # 7) Assign directions with weighted smart distribution
             main_branches = children.get(root.get("key"), [])
-            # Alternate right/left deterministically
-            for idx, n in enumerate(sorted(main_branches, key=lambda x: x.get("key", 0))):
-                n["dir"] = "right" if idx % 2 == 0 else "left"
             
-            # 7) Ensure loc only on root if absent
+            # Count descendants for any node
+            def count_descendants(node_key):
+                count = 0
+                for child in children.get(node_key, []):
+                    count += 1 + count_descendants(child.get("key"))
+                return count
+            
+            # Calculate weights for each main branch
+            branch_weights = []
+            for branch in main_branches:
+                weight = 1 + count_descendants(branch.get("key"))
+                branch_weights.append((branch, weight))
+            
+            # Sort by weight (heaviest first) for better balance
+            branch_weights.sort(key=lambda x: x[1], reverse=True)
+            
+            # Smart distribution: balance by weight, not just count
+            # Use a greedy algorithm to minimize imbalance
+            left_total = 0
+            right_total = 0
+            left_branches = []
+            right_branches = []
+            
+            for branch, weight in branch_weights:
+                if left_total <= right_total:
+                    branch["dir"] = "left"
+                    left_total += weight
+                    left_branches.append(branch)
+                else:
+                    branch["dir"] = "right"
+                    right_total += weight
+                    right_branches.append(branch)
+            
+            # All descendants inherit parent direction for visual clarity
+            def assign_dir_recursive(node, parent_dir):
+                for child in children.get(node.get("key"), []):
+                    child["dir"] = parent_dir
+                    assign_dir_recursive(child, parent_dir)
+            
+            for branch in main_branches:
+                assign_dir_recursive(branch, branch.get("dir"))
+            
+            # 8) Ensure loc only on root if absent
             if not root.get("loc"):
                 root["loc"] = "0 0"
             
-            # 8) Cleanup helper fields
+            # 9) Cleanup helper fields
             for n in nodes:
                 if "_depth" in n:
                     del n["_depth"]
@@ -372,7 +462,8 @@ class MindMapTemplate(BaseTemplate):
             return merged
 
         # Heuristic: create a single synthetic root and attach each map's root as a main branch
-        synthetic_root = {"key": 0, "text": "\u062e\u0631\u064a\u0637\u0629 \u0634\u0627\u0645\u0644\u0629" if self.language == "arabic" else "Comprehensive Mind Map", "loc": "0 0", "brush": Settings.MINDMAP_COLORS[0]}
+        # Don't assign brush here - let post-processing handle it
+        synthetic_root = {"key": 0, "text": "\u062e\u0631\u064a\u0637\u0629 \u0634\u0627\u0645\u0644\u0629" if self.language == "arabic" else "Comprehensive Mind Map", "loc": "0 0"}
         merged_nodes: List[Dict[str, Any]] = [synthetic_root]
 
         # Determine next key and remap keys to keep unique
@@ -414,8 +505,8 @@ class MindMapTemplate(BaseTemplate):
             # Create a branch node representing this chunk
             branch_key = next_key; next_key += 1
             chunk_title = root.get("text") or (f"Chunk {idx+1}")
-            dir_val = "right" if idx % 2 == 0 else "left"
-            branch = {"key": branch_key, "parent": 0, "text": chunk_title, "dir": dir_val, "brush": Settings.MINDMAP_COLORS[1]}
+            # Don't assign dir and brush here - let post-processing handle it
+            branch = {"key": branch_key, "parent": 0, "text": chunk_title}
             if (0, norm_text(chunk_title)) not in seen_by_parent_text or not Settings.MINDMAP_DEDUPLICATE_NODES:
                 merged_nodes.append(branch)
                 seen_by_parent_text.add((0, norm_text(chunk_title)))
@@ -433,12 +524,11 @@ class MindMapTemplate(BaseTemplate):
                         stack.append((ch, branch_key))
                     continue
                 new_key = next_key; next_key += 1
+                # Only copy key, parent, and text - let post-processing add brush and dir
                 new_node = {
                     "key": new_key,
                     "parent": new_parent,
-                    "text": orig_node.get("text"),
-                    "brush": orig_node.get("brush"),
-                    "dir": orig_node.get("dir")
+                    "text": orig_node.get("text")
                 }
                 parent_text_key = (new_parent, norm_text(new_node.get("text")))
                 if Settings.MINDMAP_DEDUPLICATE_NODES and parent_text_key in seen_by_parent_text:
