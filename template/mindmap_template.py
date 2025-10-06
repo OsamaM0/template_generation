@@ -13,6 +13,7 @@ from prompts.arabic.mindmap_prompts import ARABIC_MINDMAP_PROMPTS
 from prompts.english.mindmap_prompts import ENGLISH_MINDMAP_PROMPTS
 from models.mindmap_models import MindMapResponse
 from config.settings import Settings
+from utils.mindmap_postprocess import post_process_mindmap
 
 logger = logging.getLogger(__name__)
 
@@ -115,14 +116,6 @@ class MindMapTemplate(BaseTemplate):
         # Validate input
         self.validate_input(content)
         
-        # Get content analysis if provided
-        content_analysis = kwargs.get('content_analysis', {})
-        
-        # Truncate content if it's too long to prevent token overflow
-        max_content_length = 2000  # Reduced for better performance with Arabic text
-        if len(content) > max_content_length:
-            content = content[:max_content_length] + "..."
-            logger.debug(f"Content truncated to {max_content_length} characters")
         
         # Clean the content
         content = content.strip()
@@ -137,242 +130,23 @@ class MindMapTemplate(BaseTemplate):
             for idx, ch in enumerate(chunks):
                 logger.debug(f"Generating partial mind map for chunk {idx+1}/{len(chunks)} size={len(ch)}")
                 mm = self._generate_single_pass(ch)
+                if not mm:
+                    continue
                 partial_maps.append(mm)
+            if not partial_maps:
+                return None
             merged = self._merge_mindmaps(partial_maps)
             merged = self._post_process_mindmap(merged)
+           
             return merged
         
         # Single pass generation
         return self._generate_single_pass(content)
-        
-        # Get the prompt template for the detected language
-        prompt_template = self.get_prompt_template(self.language)
-        
-        # Decide whether to use enhanced planning
-        use_planning = Settings.MINDMAP_ENHANCED_THINKING and bool(self.get_planning_template(self.language))
-        
-        # Create the prompt(s)
-        if use_planning:
-            planning_prompt = ChatPromptTemplate.from_template(self.get_planning_template(self.language))
-            main_prompt = ChatPromptTemplate.from_template(prompt_template)
-        else:
-            main_prompt = ChatPromptTemplate.from_template(prompt_template)
-        
-        # Create chain(s)
-        main_chain = create_stuff_documents_chain(llm=self.model, prompt=main_prompt)
-        docs = [Document(page_content=content)]
-        
-        try:
-            logger.debug(f"Generating mind map for content: {content[:100]}...")
-            # Optional: planning phase (ignored output besides priming the model via conversation context)
-            if use_planning:
-                try:
-                    planning_chain = create_stuff_documents_chain(llm=self.model, prompt=planning_prompt)
-                    _ = planning_chain.invoke({"context": docs})
-                except Exception as e:
-                    logger.debug(f"Planning phase failed/ignored: {e}")
-            
-            # Invoke the main chain
-            response = main_chain.invoke({"context": docs})
-            
-            logger.debug(f"Raw API response: {response[:200]}...")
-            
-            # Parse the JSON response
-            mind_map_data = self.clean_and_parse_json(response)
-            
-            # Post-processing to improve structure without changing schema
-            mind_map_data = self._post_process_mindmap(mind_map_data)
-            
-            # Validate the structure
-            if "nodeDataArray" not in mind_map_data:
-                raise ValueError("Invalid mind map structure: missing nodeDataArray")
-            
-            # Ensure we have the correct class field
-            if "class" not in mind_map_data:
-                mind_map_data["class"] = "go.TreeModel"
-            
-            logger.debug(f"Successfully generated mind map with {len(mind_map_data.get('nodeDataArray', []))} nodes")
-            
-            return mind_map_data
-            
-        except Exception as e:
-            logger.error(f"Error generating mind map: {e}")
-            logger.error(f"Full error details: {str(e)}")
-            
-            # Fallback: return a simple mind map structure
-            fallback_map = {
-                "class": "go.TreeModel",
-                "nodeDataArray": [
-                    {"key": 0, "text": "محتوى تعليمي" if self.language == "arabic" else "Educational Content", "loc": "0 0"},
-                    {"key": 1, "parent": 0, "text": "نقطة رئيسية" if self.language == "arabic" else "Main Point", "brush": "skyblue", "dir": "right"}
-                ]
-            }
-            
-            logger.warning("Using fallback mind map structure")
-            return fallback_map
+
 
     def _post_process_mindmap(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Improve balance, colors, and enforce safe limits. Output schema unchanged."""
-        try:
-            if not isinstance(data, dict):
-                return data
-            nodes = data.get("nodeDataArray")
-            if not isinstance(nodes, list) or not nodes:
-                return data
-            
-            # 1) Enforce class
-            data.setdefault("class", "go.TreeModel")
-            
-            # 2) Find root and build index
-            root = None
-            by_key = {}
-            for n in nodes:
-                if isinstance(n, dict):
-                    by_key[n.get("key")] = n
-                    if n.get("parent") is None:
-                        root = n
-            if root is None:
-                return data
-            
-            # 3) Limit max nodes
-            if len(nodes) > Settings.MINDMAP_MAX_NODES:
-                data["nodeDataArray"] = nodes[:Settings.MINDMAP_MAX_NODES]
-                nodes = data["nodeDataArray"]
-                # Rebuild index after trim
-                by_key = {n.get("key"): n for n in nodes if isinstance(n, dict)}
-            
-            # 4) Depth calculation
-            children = {}
-            for n in nodes:
-                p = n.get("parent")
-                children.setdefault(p, []).append(n)
-            
-            def assign_depth(node, depth, visited):
-                node["_depth"] = depth
-                for ch in children.get(node.get("key"), []):
-                    if ch.get("key") in visited:
-                        continue
-                    visited.add(ch.get("key"))
-                    assign_depth(ch, depth + 1, visited)
-            assign_depth(root, 0, {root.get("key")})
-            
-            # 5) Enforce maximum depth & remove example / unrelated nodes
-            max_allowed_depth = max(0, Settings.MINDMAP_MAX_DEPTH)
-            example_keywords = []
-            if Settings.MINDMAP_EXCLUDE_EXAMPLES:
-                example_keywords = [
-                    "مثال", "امثلة", "مثلاً", "على سبيل المثال", "قصة", "حكاية", "سيناريو", "تجربة", "توضيح", "case", "example", "e.g", "scenario", "story", "illustration", "experiment", "case study"
-                ]
-
-            # Build children mapping again for safe pruning
-            children = {}
-            for n in nodes:
-                children.setdefault(n.get("parent"), []).append(n)
-
-            # Mark nodes to keep
-            to_keep = set()
-            def dfs_keep(node, depth):
-                # Depth check
-                if depth > max_allowed_depth:
-                    return
-                text_val = str(node.get("text") or "").strip().lower()
-                # Example filtering
-                if Settings.MINDMAP_EXCLUDE_EXAMPLES and any(kw in text_val for kw in example_keywords):
-                    return
-                to_keep.add(node.get("key"))
-                for ch in children.get(node.get("key"), []):
-                    dfs_keep(ch, depth + 1)
-            dfs_keep(root, 0)
-
-            if len(to_keep) != len(nodes):
-                # Reconstruct pruned list, skipping removed nodes and orphaned subtrees
-                pruned = []
-                for n in nodes:
-                    k = n.get("key")
-                    p = n.get("parent")
-                    if k in to_keep and (p is None or p in to_keep):
-                        pruned.append(n)
-                nodes = pruned
-                data["nodeDataArray"] = nodes
-
-            # Recompute depth for remaining nodes
-            children = {}
-            for n in nodes:
-                children.setdefault(n.get("parent"), []).append(n)
-            def assign_depth(node, depth, visited):
-                node["_depth"] = depth
-                for ch in children.get(node.get("key"), []):
-                    if ch.get("key") in visited:
-                        continue
-                    visited.add(ch.get("key"))
-                    assign_depth(ch, depth + 1, visited)
-            assign_depth(root, 0, {root.get("key")})
-
-            # 6) Color by depth - Assign to ALL nodes based on their depth
-            colors = Settings.MINDMAP_COLORS
-            for n in nodes:
-                depth = max(0, min(n.get("_depth", 0), len(colors) - 1))
-                # Always assign brush based on depth
-                n["brush"] = colors[depth]
-            
-            # 7) Assign directions with weighted smart distribution
-            main_branches = children.get(root.get("key"), [])
-            
-            # Count descendants for any node
-            def count_descendants(node_key):
-                count = 0
-                for child in children.get(node_key, []):
-                    count += 1 + count_descendants(child.get("key"))
-                return count
-            
-            # Calculate weights for each main branch
-            branch_weights = []
-            for branch in main_branches:
-                weight = 1 + count_descendants(branch.get("key"))
-                branch_weights.append((branch, weight))
-            
-            # Sort by weight (heaviest first) for better balance
-            branch_weights.sort(key=lambda x: x[1], reverse=True)
-            
-            # Smart distribution: balance by weight, not just count
-            # Use a greedy algorithm to minimize imbalance
-            left_total = 0
-            right_total = 0
-            left_branches = []
-            right_branches = []
-            
-            for branch, weight in branch_weights:
-                if left_total <= right_total:
-                    branch["dir"] = "left"
-                    left_total += weight
-                    left_branches.append(branch)
-                else:
-                    branch["dir"] = "right"
-                    right_total += weight
-                    right_branches.append(branch)
-            
-            # All descendants inherit parent direction for visual clarity
-            def assign_dir_recursive(node, parent_dir):
-                for child in children.get(node.get("key"), []):
-                    child["dir"] = parent_dir
-                    assign_dir_recursive(child, parent_dir)
-            
-            for branch in main_branches:
-                assign_dir_recursive(branch, branch.get("dir"))
-            
-            # 8) Ensure loc only on root if absent
-            if not root.get("loc"):
-                root["loc"] = "0 0"
-            
-            # 9) Cleanup helper fields
-            for n in nodes:
-                if "_depth" in n:
-                    del n["_depth"]
-            
-            return data
-        except Exception as e:
-            logger.debug(f"Post-process skipped due to error: {e}")
-            return data
+        """Delegate to shared utility for post-processing."""
+        return post_process_mindmap(data)
 
     # ---- New helpers for multi-pass generation ----
     def _sanitize_content(self, content: str) -> str:
@@ -441,14 +215,7 @@ class MindMapTemplate(BaseTemplate):
             return mind_map_data
         except Exception as e:
             logger.error(f"Error in single-pass generation: {e}")
-            return {
-                "class": "go.TreeModel",
-                "nodeDataArray": [
-                    {"key": 0, "text": "\u0645\u062d\u062a\u0648\u0649 \u062a\u0639\u0644\u064a\u0645\u064a" if self.language == "arabic" else "Educational Content", "loc": "0 0"},
-                    {"key": 1, "parent": 0, "text": "\u0646\u0642\u0637\u0629 \u0631\u0626\u064a\u0633\u064a\u0629" if self.language == "arabic" else "Main Point", "brush": "skyblue", "dir": "right"}
-                ]
-            }
-
+            return None
     def _merge_mindmaps(self, maps: List[Dict[str, Any]]) -> Dict[str, Any]:
         # Combine multiple mind maps into a single GoJS tree model
         merged: Dict[str, Any] = {"class": "go.TreeModel", "nodeDataArray": []}

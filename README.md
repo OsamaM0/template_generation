@@ -329,3 +329,86 @@ The new functionality is **fully backward compatible**. Your existing code will 
 2. **Or use** the new convenience method: `generate_goal_based_questions()`
 3. **Optional**: Remove goals parameter to let system auto-generate them
 4. **Access** the enhanced output structure for goal-question relationships
+
+## Mind Map Reprocessing (Existing Database)
+
+If you already have mind maps stored in MongoDB (collection `ai.mindmaps`) that were generated before the enhanced post-processing (balanced `dir`, depth pruning, color assignment), you can retrofit them **without re-generating via the LLM**.
+
+### What It Does
+The script `reprocess_mindmaps.py`:
+- Loads each existing record
+- Extracts only: `key`, `text`, `parent` from each node
+- Recomputes: `brush` (color by depth), `dir` (balanced left/right), root `loc` (if missing)
+- Applies depth limit + example filtering (based on current `Settings`)
+- Prunes disallowed nodes (depth > `MINDMAP_MAX_DEPTH`, example/story nodes if enabled)
+- Updates document with:
+  - `mindmap.nodeDataArray` (with new visual fields)
+  - `metadata.reprocessed_at`
+  - `metadata.reprocess_runs` (incremented)
+  - `metadata.reprocess_changes` (summary counts)
+
+It never changes original `key`, `text`, `parent` ordering except when pruning is required by config.
+
+### Dry Run First (Recommended)
+Dry run prints a summary but does NOT modify the database:
+
+```bash
+python reprocess_mindmaps.py --limit 10
+```
+
+Example output line:
+```
+[3] filename=lesson_12.txt doc_uuid=123e... changes={'before_nodes': 58, 'after_nodes': 52, 'dir_assigned': 51, 'brush_assigned': 52, 'root_loc': '0 0'}
+```
+
+### Apply Changes
+```bash
+python reprocess_mindmaps.py --apply
+```
+
+### Filtering Options
+```bash
+python reprocess_mindmaps.py --apply --filename chemistry
+python reprocess_mindmaps.py --apply --custom-id 652fa1c4b3...
+python reprocess_mindmaps.py --apply --contains-text الطاقة
+python reprocess_mindmaps.py --apply --limit 25 --contains-text geometry
+```
+
+Flags:
+- `--limit N`          Process only first N matched documents
+- `--filename SUBSTR`  Case-insensitive substring match on stored filename
+- `--custom-id ID`     Exact match on `custom_id`
+- `--contains-text T`  Any node whose text contains substring T (case-insensitive)
+- `--apply`            Persist changes (omit for dry run)
+
+### Idempotency
+Running multiple times is safe— it recomputes visual fields deterministically from the preserved structure. Pruning decisions remain consistent as long as `Settings` values (depth, exclusion flags) don’t change.
+
+### Configuration Sensitivity
+The script relies on current environment / `Settings` values:
+- `MINDMAP_MAX_DEPTH`
+- `MINDMAP_EXCLUDE_EXAMPLES`
+- `MINDMAP_MAX_NODES`
+- `MINDMAP_COLORS`
+
+Adjust them before running if you want different pruning or color palette.
+
+### Metadata Audit
+Each updated record gains:
+```json
+"metadata": {
+  ...,
+  "reprocessed_at": "2025-10-05T12:34:56Z",
+  "reprocess_runs": 2,
+  "reprocess_changes": {
+    "before_nodes": 58,
+    "after_nodes": 52,
+    "dir_assigned": 51,
+    "brush_assigned": 52,
+    "root_loc": "0 0"
+  }
+}
+```
+
+This enables tracking improvements without losing provenance.
+
