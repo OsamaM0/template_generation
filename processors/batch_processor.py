@@ -149,7 +149,7 @@ class BatchProcessor:
         filename = document_data.get('filename', 'Unknown')
         custom_id = document_data.get('custom_id')
         collection_id = document_data.get('collection_id')
-        content = document_data.get('content', '')
+        content = document_data.get('content_without_image', '')
         
         # Skip documents with specific collection IDs
         skip_collection_ids = [
@@ -308,7 +308,7 @@ class BatchProcessor:
             goals: Learning goals
             template_type: Type of template to generate
         """
-        content = document_data.get('content', '')
+        content = document_data.get('content_without_image', '')
 
         # Generate template based on type
         if template_type == 'questions':
