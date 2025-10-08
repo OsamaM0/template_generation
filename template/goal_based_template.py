@@ -96,13 +96,36 @@ Formatting Instructions:
         else:
             # Scenario 2: No goals - generate worksheet first to extract goals
             print("📋 Scenario 2: No goals provided - generating worksheet with goals first")
-            worksheet_result = self.worksheet_template.generate(content)
+            worksheet_result = None
+            try:
+                worksheet_result = self.worksheet_template.generate(content)
+            except Exception as gen_exc:
+                # Fail soft – continue with default goals later
+                try:
+                    print(f"⚠️  Worksheet generation failed while extracting goals: {gen_exc}")
+                except Exception:
+                    pass
+
+            # Defensive normalization – ensure we always have a dict structure
+            if worksheet_result is None:
+                worksheet_result = {"goals": [], "_warning": "worksheet_generation_returned_none"}
+            elif not isinstance(worksheet_result, dict):
+                worksheet_result = {"goals": [], "_warning": "worksheet_generation_invalid_type"}
             
             # Extract goals from worksheet
-            extracted_goals = worksheet_result.get('goals', [])
+            try:
+                extracted_goals = worksheet_result.get('goals', []) if isinstance(worksheet_result, dict) else []
+            except Exception:
+                extracted_goals = []
             if not extracted_goals:
                 # Fallback to default goals
                 extracted_goals = self._generate_default_goals(content, content_analysis)
+                if isinstance(worksheet_result, dict):
+                    worksheet_result.setdefault('_fallbacks', {})['used_default_goals'] = True
+                try:
+                    print(f"🔁 Fallback: Using {len(extracted_goals)} default goals")
+                except Exception:
+                    pass
             
             print(f"✅ Generated {len(extracted_goals)} goals from content")
             structured_goals = self._create_structured_goals(extracted_goals)
@@ -262,13 +285,29 @@ Formatting Instructions:
         goal_focused_content = self._create_goal_focused_content(content, goal)
         
         # Generate questions using the enhanced question template
-        result = self.question_template.generate(
-            content=goal_focused_content,
-            goals=[goal.text],
-            question_counts=questions_per_goal,
-            difficulty_levels=difficulty_levels,
-            content_analysis=content_analysis
-        )
+        result = None
+        try:
+            result = self.question_template.generate(
+                content=goal_focused_content,
+                goals=[goal.text],
+                question_counts=questions_per_goal,
+                difficulty_levels=difficulty_levels,
+                content_analysis=content_analysis
+            )
+        except Exception as gen_exc:
+            try:
+                print(f"⚠️  Goal-specific question generation failed for {goal.id}: {gen_exc}")
+            except Exception:
+                pass
+        # Normalize None / unexpected types to empty dict for downstream .get usage
+        if result is None or not isinstance(result, dict):
+            result = {
+                'multiple_choice': [],
+                'short_answer': [],
+                'complete': [],
+                'true_false': [],
+                '_thinking_metadata': {'enhanced_reasoning': False, 'normalized_empty': True}
+            }
         
         # Extract just the questions and preserve thinking metadata at goal level
         thinking_meta = result.get('_thinking_metadata') if isinstance(result, dict) else None

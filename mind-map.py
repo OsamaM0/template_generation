@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # OpenAI Configuration
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')  # Set your OpenAI API key as environment variable
 # MODEL_ID = "openai/gpt-oss-20b"  # Using the only available model on your RunPod endpoint
-MODEL_ID = "gpt-4o-mini-2024-07-18"
+MODEL_ID = "gpt-4o-mini"
 # Initialize OpenAI client with shorter timeout for better error handling
 client = OpenAI(api_key=OPENAI_API_KEY, 
                 # base_url="https://mw68d46ydpbo0a-8000.proxy.runpod.net/v1",

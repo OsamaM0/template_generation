@@ -122,12 +122,15 @@ class TemplateGenerator:
         self.validator.validate_content(content)
         self.validator.validate_goals(goals)
         
-        # Additional validation for questions template
+        # Apply defaults early for questions templates so validation never sees None
         if template_type in ["questions", "goal_based_questions"]:
-            question_counts = kwargs.get("question_counts")
-            difficulty_levels = kwargs.get("difficulty_levels")
-            self.validator.validate_question_counts(question_counts)
-            self.validator.validate_difficulty_levels(difficulty_levels)
+            if kwargs.get("question_counts") is None:
+                kwargs["question_counts"] = Settings.DEFAULT_QUESTION_COUNTS
+            if kwargs.get("difficulty_levels") is None:
+                kwargs["difficulty_levels"] = Settings.DIFFICULTY_LEVELS
+            # Now validate
+            self.validator.validate_question_counts(kwargs.get("question_counts"))
+            self.validator.validate_difficulty_levels(kwargs.get("difficulty_levels"))
         
         # Process content
         processed_content = self.content_processor.preprocess_content(content)
@@ -184,7 +187,13 @@ class TemplateGenerator:
             return result
             
         except Exception as e:
-            raise RuntimeError(f"Template generation failed: {str(e)}")
+            # Provide richer context, especially for common NoneType attribute errors
+            err_type = type(e).__name__
+            hint = ""
+            if "NoneType" in err_type or "'NoneType' object has no attribute" in str(e):
+                hint = (" | Hint: A sub-template likely returned None (e.g., worksheet while extracting goals). "
+                        "Defensive fallbacks were added; please retry. If persists, inspect worksheet_template.generate().")
+            raise RuntimeError(f"Template generation failed: {err_type}: {str(e)}{hint}") from e
     
     def generate_question_bank(self, content: str, goals: Optional[List[str]] = None,
                               question_counts: Optional[Dict[str, int]] = None,

@@ -101,6 +101,18 @@ class QuestionTemplate(BaseTemplate):
             "question_counts": self._format_question_counts(question_counts),
             "difficulty_levels": difficulty_levels
         })
+        # Normalize None / unexpected type
+        if result is None or not isinstance(result, dict):
+            try:
+                print("⚠️  QuestionTemplate chain returned non-dict; normalizing to empty structure")
+            except Exception:
+                pass
+            result = {
+                'multiple_choice': [],
+                'short_answer': [],
+                'complete': [],
+                'true_false': [],
+            }
         
         # Keep solution outlines only for math runs; otherwise strip them for safety
         def _strip_or_keep_solution_outlines(obj: Any, keep: bool):
