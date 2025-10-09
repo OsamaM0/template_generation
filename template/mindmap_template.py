@@ -1,5 +1,5 @@
 from typing import Dict, Any, List
-from typing import Tuple, Set
+from typing import Tuple, Set, Callable, Optional
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
@@ -7,6 +7,12 @@ import json
 import re
 import logging
 from json_repair import repair_json
+
+# Optional faster JSON library
+try:  # pragma: no cover - optional dependency
+    import orjson  # type: ignore
+except ImportError:  # pragma: no cover
+    orjson = None  # type: ignore
 
 from template.base_template import BaseTemplate
 from prompts.arabic.mindmap_prompts import ARABIC_MINDMAP_PROMPTS
@@ -36,70 +42,75 @@ class MindMapTemplate(BaseTemplate):
         prompts = self.prompt_templates.get(language, self.prompt_templates["english"])
         return prompts.get("planning_template")
     
+    _CODE_BLOCK_JSON_RE = re.compile(r'```json\s*|```', re.IGNORECASE)
+    _FIRST_JSON_OBJECT_RE = re.compile(r'(\{.*\})', re.DOTALL)
+
     def clean_and_parse_json(self, response_text: str) -> Dict[str, Any]:
+        """Optimized JSON cleaning & parsing with early exits.
+
+        Performance notes:
+        - Avoid repeated regex compilation (precompiled class attrs)
+        - Minimize expensive repair_json/orjson calls (only when necessary)
+        - Fast path returns ASAP for already valid JSON
+        - Fallback sequence: direct -> whitespace normalized -> repair -> repair(normalized)
         """
-        Clean and parse JSON response from OpenAI API with multiple fallback strategies
-        """
-        logger.debug(f"Original response: {response_text[:200]}...")
-        
-        # Strategy 1: Remove markdown code blocks
-        cleaned_text = re.sub(r'```json\s*', '', response_text)
-        cleaned_text = re.sub(r'```\s*$', '', cleaned_text, flags=re.MULTILINE)
-        
-        # Strategy 2: Extract JSON from response if it contains other text
-        json_match = re.search(r'(\{.*\})', cleaned_text, re.DOTALL)
-        if json_match:
-            cleaned_text = json_match.group(1)
-        
-        # Strategy 3: Remove any leading/trailing whitespace and non-JSON characters
-        cleaned_text = cleaned_text.strip()
-        
-        # Strategy 4: Try to find the start and end of JSON object
-        start_idx = cleaned_text.find('{')
-        end_idx = cleaned_text.rfind('}')
-        
-        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-            cleaned_text = cleaned_text[start_idx:end_idx + 1]
-        
-        logger.debug(f"Cleaned text: {cleaned_text[:200]}...")
-        
-        # Try parsing strategies in order of preference
-        parsing_strategies = [
-            # Strategy 1: Direct JSON parsing
-            lambda text: json.loads(text),
-            
-            # Strategy 2: Use json-repair library
-            lambda text: json.loads(repair_json(text)),
-            
-            # Strategy 3: Remove common formatting issues and try again
-            lambda text: json.loads(
-                text.replace('\n', ' ')
-                    .replace('\t', ' ')
-                    .replace('  ', ' ')
-                    .strip()
-            ),
-            
-            # Strategy 4: Use json-repair on cleaned text
-            lambda text: json.loads(repair_json(
-                text.replace('\n', ' ')
-                    .replace('\t', ' ')
-                    .replace('  ', ' ')
-                    .strip()
-            )),
-        ]
-        
-        for i, strategy in enumerate(parsing_strategies):
+        snippet = (response_text or "")[:200]
+        logger.debug(f"Original response (truncated): {snippet}...")
+
+        text = self._CODE_BLOCK_JSON_RE.sub('', response_text or '').strip()
+
+        # Narrow to first JSON-like block if extra explanation exists
+        m = self._FIRST_JSON_OBJECT_RE.search(text)
+        if m:
+            text = m.group(1)
+
+        # Trim outside braces just in case
+        start = text.find('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            text = text[start:end+1]
+        text_stripped = text.strip()
+
+        # Fast path 1: direct parse (orjson > json)
+        try:
+            if orjson:  # pragma: no cover
+                return orjson.loads(text_stripped)  # type: ignore
+            return json.loads(text_stripped)
+        except Exception:
+            pass
+
+        # Prepare normalized variant (single spaces)
+        normalized = re.sub(r'\s+', ' ', text_stripped)
+        if normalized != text_stripped:
             try:
-                result = strategy(cleaned_text)
-                logger.debug(f"Successfully parsed JSON using strategy {i + 1}")
-                return result
-            except (json.JSONDecodeError, ValueError) as e:
-                logger.debug(f"Strategy {i + 1} failed: {e}")
-                continue
-        
-        # If all strategies fail, log the error and raise exception
-        logger.error(f"All JSON parsing strategies failed for text: {cleaned_text[:500]}")
-        raise ValueError("Unable to parse response as valid JSON after trying multiple strategies")
+                if orjson:  # pragma: no cover
+                    return orjson.loads(normalized)  # type: ignore
+                return json.loads(normalized)
+            except Exception:
+                pass
+
+        # Attempt repair on original
+        try:
+            repaired = repair_json(text_stripped)
+            try:
+                if orjson:  # pragma: no cover
+                    return orjson.loads(repaired)  # type: ignore
+                return json.loads(repaired)
+            except Exception:
+                # If repair returns but still fails, continue to normalized repair
+                pass
+        except Exception as e:  # pragma: no cover
+            logger.debug(f"repair_json original failed: {e}")
+
+        # Attempt repair on normalized form
+        try:
+            repaired_norm = repair_json(normalized)
+            if orjson:  # pragma: no cover
+                return orjson.loads(repaired_norm)  # type: ignore
+            return json.loads(repaired_norm)
+        except Exception as e:
+            logger.error(f"All JSON parsing strategies failed: {e}; text excerpt={text_stripped[:500]}")
+            raise ValueError("Unable to parse response as valid JSON") from e
     
     def generate(self, content: str, goals: List[str] = None, **kwargs) -> Dict[str, Any]:
         """
@@ -190,15 +201,24 @@ class MindMapTemplate(BaseTemplate):
         else:
             main_prompt = ChatPromptTemplate.from_template(prompt_template)
 
-        # Create chain(s)
-        main_chain = create_stuff_documents_chain(llm=self.model, prompt=main_prompt)
+        # Create chain(s) (cache by language & planning usage to avoid recreating per chunk)
+        cache_key = (self.language, use_planning)
+        if not hasattr(self, '_chain_cache'):
+            self._chain_cache: Dict[Tuple[Optional[str], bool], Any] = {}
+        if cache_key not in self._chain_cache:
+            self._chain_cache[cache_key] = create_stuff_documents_chain(llm=self.model, prompt=main_prompt)
+        main_chain = self._chain_cache[cache_key]
         docs = [Document(page_content=content)]
 
         try:
             logger.debug(f"Generating mind map (single-pass) for content: {content[:100]}...")
             if use_planning:
                 try:
-                    planning_chain = create_stuff_documents_chain(llm=self.model, prompt=planning_prompt)
+                    # Planning chain is lighter; cache separately
+                    p_cache_key = (self.language, 'planning')
+                    if p_cache_key not in self._chain_cache:
+                        self._chain_cache[p_cache_key] = create_stuff_documents_chain(llm=self.model, prompt=planning_prompt)
+                    planning_chain = self._chain_cache[p_cache_key]
                     _ = planning_chain.invoke({"context": docs})
                 except Exception as e:
                     logger.debug(f"Planning phase failed/ignored: {e}")

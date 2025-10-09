@@ -150,6 +150,7 @@ class BatchProcessor:
         custom_id = document_data.get('custom_id')
         collection_id = document_data.get('collection_id')
         content = document_data.get('content_without_image', '')
+        document_had_success = False  # track if at least one template stored successfully
         
         # Skip documents with specific collection IDs
         skip_collection_ids = [
@@ -165,8 +166,8 @@ class BatchProcessor:
                 self.stats.add_skip()
             return
         
-        if not content or content.strip() == '':
-            print(f"⚠️ Skipping document with empty content: {filename}")
+        if not content or len(content.strip()) < 20:
+            print(f"⚠️ Skipping document with insufficient content length: {filename}")
             with self._lock:
                 self.stats.add_skip()
             return
@@ -194,19 +195,28 @@ class BatchProcessor:
         if "questions" in requested:
             requested.update({"summaries", "worksheets"})
         ordered_types = [t for t in ["summaries", "worksheets", "questions", "mindmaps"] if t in requested]
+        # Mark that we are attempting this document (if any ordered types)
+        if ordered_types:
+            with self._lock:
+                self.stats.start_document_attempt()
 
         # Step 1: Summary
         summary_result = None
         if any(t in ordered_types for t in ["summaries"]):
             try:
+                with self._lock:
+                    self.stats.add_attempt("summaries")
                 summary_result = self.template_generator.generate_summary(content=content)
                 if self.mongo_client.store_summary(document_data, summary_result):
                     with self._lock:
                         self.stats.add_success("summaries")
+                    document_had_success = True
                 else:
                     print(f"⚠️ No changes made for summary: {filename}")
             except Exception as e:
                 print(f"❌ Failed to generate summary for {filename}: {str(e)}")
+                with self._lock:
+                    self.stats.add_template_failure("summaries")
 
         # Step 2: Goals (DB -> AI)
         goals = []
@@ -225,6 +235,8 @@ class BatchProcessor:
         worksheet_result = None
         if any(t in ordered_types for t in ["worksheets"]):
             try:
+                with self._lock:
+                    self.stats.add_attempt("worksheets")
                 worksheet_result = self.template_generator.generate_worksheet(content=content, goals=goals)
                 # Prefer structured goals if provided by template
                 refined_goals = []
@@ -247,14 +259,19 @@ class BatchProcessor:
                 if self.mongo_client.store_worksheet(document_data, goals, worksheet_result):
                     with self._lock:
                         self.stats.add_success("worksheets")
+                    document_had_success = True
                 else:
                     print(f"⚠️ No changes made for worksheet: {filename}")
             except Exception as e:
                 print(f"❌ Failed to generate worksheet for {filename}: {str(e)}")
+                with self._lock:
+                    self.stats.add_template_failure("worksheets")
 
         # Step 4: Questions (use final goals; include math reasoning if analysis suggests)
         if any(t in ordered_types for t in ["questions"]):
             try:
+                with self._lock:
+                    self.stats.add_attempt("questions")
                 questions_result = self.template_generator.generate_goal_based_questions(
                     content=content,
                     goals=goals,
@@ -269,22 +286,34 @@ class BatchProcessor:
                 if self.mongo_client.store_questions(document_data, goals, questions_result):
                     with self._lock:
                         self.stats.add_success("questions")
+                    document_had_success = True
                 else:
                     print(f"⚠️ No changes made for questions: {filename}")
             except Exception as e:
                 print(f"❌ Failed to generate questions for {filename}: {str(e)}")
+                with self._lock:
+                    self.stats.add_template_failure("questions")
 
         # Step 5: Mind Map
         if any(t in ordered_types for t in ["mindmaps"]):
             try:
+                with self._lock:
+                    self.stats.add_attempt("mindmaps")
                 mindmap_result = self.template_generator.generate_mindmap(content=content)
                 if self.mongo_client.store_mindmap(document_data, mindmap_result):
                     with self._lock:
                         self.stats.add_success("mindmaps")
+                    document_had_success = True
                 else:
                     print(f"⚠️ No changes made for mindmap: {filename}")
             except Exception as e:
                 print(f"❌ Failed to generate mindmap for {filename}: {str(e)}")
+                with self._lock:
+                    self.stats.add_template_failure("mindmaps")
+
+        # After all templates attempted, mark document processed if any success
+        with self._lock:
+            self.stats.mark_document_processed(document_had_success)
     
     def _get_goals_for_document(self, custom_id: str, content: str) -> List[str]:
         """Deprecated: goals now come from DB or AI; left for backward compatibility."""
@@ -355,6 +384,8 @@ class BatchProcessor:
         print("="*60)
         print(f"📄 Total Documents: {stats_summary['total_documents']}")
         print(f"✅ Processed: {stats_summary['processed_documents']}")
+        if 'documents_attempted' in stats_summary:
+            print(f"🛠️ Attempted: {stats_summary['documents_attempted']}")
         print(f"⏭️ Skipped: {stats_summary['skipped_documents']}")
         print(f"❌ Failed: {stats_summary['failed_documents']}")
         print(f"⏱️ Duration: {stats_summary['duration_seconds']:.1f} seconds")
@@ -366,6 +397,21 @@ class BatchProcessor:
         print(f"  📋 Worksheets: {successful['worksheets']}")
         print(f"  📄 Summaries: {successful['summaries']}")
         print(f"  🧠 Mind Maps: {successful['mindmaps']}")
+        # Additional attempt/failure details if available
+        attempts = stats_summary.get('template_attempts')
+        failures = stats_summary.get('template_failures')
+        if attempts and failures:
+            print("Template Attempts vs Failures:")
+            for t in ["summaries", "worksheets", "questions", "mindmaps"]:
+                a = attempts.get(t, 0)
+                f = failures.get(t, 0)
+                s = successful.get(t, 0)
+                print(f"  - {t.capitalize()}: attempts={a}, success={s}, failures={f}")
+            total_attempts = sum(attempts.values())
+            total_success = sum(successful.values())
+            print(f"  Total: attempts={total_attempts}, success={total_success}, failures={total_attempts - total_success}")
+            if stats_summary['documents_attempted']:
+                print(f"Document Success Ratio: {stats_summary['processed_documents']}/{stats_summary['documents_attempted']} ({(stats_summary['processed_documents']/stats_summary['documents_attempted']*100):.1f}%)")
         print("="*60)
     
     def get_stats(self) -> ProcessingStats:
