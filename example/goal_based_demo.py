@@ -19,8 +19,8 @@ import json
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from generators.template_generator import TemplateGenerator
-from template.goal_based_template import GoalBasedTemplate
+from ..generators.template_generator import TemplateGenerator
+from ..template.goal_based_template import GoalBasedTemplate
 
 def demo_scenario_1():
     """Scenario 1: Goals provided with content"""

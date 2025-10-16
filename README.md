@@ -35,7 +35,7 @@ A modular system for generating educational content templates including question
 - ✅ Faster generation and lower token usage
 - ✅ Balanced and professional appearance
 
-See [MINDMAP_SMART_WORKFLOW.md](MINDMAP_SMART_WORKFLOW.md) for detailed documentation.
+See docs/MINDMAP_SMART_WORKFLOW.md for detailed documentation and docs/ARCHITECTURE.md for the full system architecture.
 
 ### Multi-pass Mind Map Generation
 

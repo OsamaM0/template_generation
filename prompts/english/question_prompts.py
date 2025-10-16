@@ -128,6 +128,3 @@ Answer: x = 5
 """
     }
 }
-
-# If math content is found, use logical thinking principles for question generation.
-# filepath: w:\AI\LLM\Saudi-Edu\template_generation\prompts\english\question_prompts.py

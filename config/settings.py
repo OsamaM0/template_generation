@@ -9,7 +9,8 @@ class Settings:
     
     # OpenAI Configuration
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4")
+    NON_MATH_MODEL = os.getenv("OPENAI_MODEL_NORMAL", "gpt-4o-mini")
+    MATH_MODEL = os.getenv("OPENAI_MODEL_MATH", "gpt-5")
     TEMPERATURE = float(os.getenv("TEMPERATURE", "0.7"))
     
     # Language Configuration

@@ -8,7 +8,7 @@ import json
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from generators.template_generator import TemplateGenerator
+from ..generators.template_generator import TemplateGenerator
 
 def example_usage():
     """Demonstrate various ways to use the template generator."""

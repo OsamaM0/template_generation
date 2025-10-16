@@ -5,7 +5,7 @@ This script demonstrates how to use all available templates including the new mi
 """
 
 import json
-from generators.template_generator import TemplateGenerator
+from ..generators.template_generator import TemplateGenerator
 
 def comprehensive_example():
     """Generate all template types for the same content."""

@@ -21,8 +21,8 @@ from pathlib import Path
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from generators.template_generator import TemplateGenerator
-from tools.math_reasoning import MathReasoningAgent, MathTools, ChainOfThoughtPrompts
+from ..generators.template_generator import TemplateGenerator
+from ..tools.math_reasoning import MathReasoningAgent, MathTools, ChainOfThoughtPrompts
 
 def load_sample_content():
     """Load sample mathematical content."""
